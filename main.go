@@ -5,6 +5,7 @@ import (
 	"fmt"
 	_ "github.com/influxdata/influxdb1-client" // this is important because of the bug in go mod
 	client "github.com/influxdata/influxdb1-client/v2"
+	"github.com/memcachier/mc"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -14,18 +15,27 @@ import (
 	"time"
 )
 
-const (
-	//sensorFileName         = "/sys/bus/w1/devices/28-011313a1d9aa/w1_slave"
-	sensorFileName         = "/home/federico/w1_slave"
+var (
+	//sensorFileName         = os.Getenv("PI_SENSOR_FILENAME")
+	//influxConnectionString = os.Getenv("INFLUX_DB")
+	memcachedConn          = "mc5.dev.ec2.memcachier.com:11211"
 	influxConnectionString = "http://localhost:8086"
+	sensorFileName         = "/home/pi/w1_slave_test"
 )
 
 func main() {
+	startRecording()
+	defer rec()
+}
+
+func startRecording() {
 	var wg0 sync.WaitGroup
 	var wg1 sync.WaitGroup
 	c, err := client.NewHTTPClient(client.HTTPConfig{
 		Addr: influxConnectionString,
 	})
+	m := mc.NewMC(memcachedConn, "F59154", "25565BCD30B9353C04E5EAB794735F1E")
+	defer m.Quit()
 	if err != nil {
 		fmt.Println("Error creating InfluxDB Client: ", err.Error())
 	}
@@ -61,6 +71,9 @@ func main() {
 				if err != nil {
 					fmt.Println("failure to parse float", err.Error())
 				}
+				if floatValue != 0.0 {
+					floatValue = floatValue / 1000
+				}
 				tags := map[string]string{"nombre_fermentador": "oriente"}
 				for i := 0; i < 10; i++ {
 					fields := map[string]interface{}{
@@ -71,7 +84,7 @@ func main() {
 						fmt.Println("Error: ", err.Error())
 					}
 					bp.AddPoint(pt)
-					time.Sleep(100 * time.Millisecond)
+					time.Sleep(100 * time.Second)
 				}
 				err = c.Write(bp)
 				if err != nil {
@@ -88,30 +101,19 @@ func main() {
 	// Creates a new datapoint for the current IP
 	go func() {
 		for {
-			bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
-				Database:  "vistanave",
-				Precision: "h",
-			})
 			res, err := http.Get("https://api.ipify.org")
 			if err != nil {
 				fmt.Println("Couldn't get IP: ", err.Error())
 			}
 			ip, err := ioutil.ReadAll(res.Body)
+			defer res.Body.Close()
 			if err != nil {
 				fmt.Println("failure to read response body: ", err.Error())
 			}
-			tags := map[string]string{"artefacto": "raspberry_pi"}
-			fields := map[string]interface{}{"ip": ip}
-			pt, err := client.NewPoint("ips", tags, fields, time.Now())
+			_, err = m.Set("ip", string(ip), 0, 0, 0)
 			if err != nil {
-				fmt.Println("Error: ", err.Error())
+				fmt.Println("failure to store IP in memcached: ", err.Error())
 			}
-			bp.AddPoint(pt)
-			err = c.Write(bp)
-			if err != nil {
-				fmt.Println(err)
-			}
-			defer res.Body.Close()
 			time.Sleep(3 * time.Hour)
 		}
 		// Unreachable code
@@ -119,4 +121,12 @@ func main() {
 	}()
 
 	wg0.Wait()
+}
+
+func rec() {
+	if r := recover(); r != nil {
+		fmt.Println("Panic: recovering. Restarting ", r)
+	}
+	time.Sleep(2 * time.Minute)
+	startRecording()
 }
