@@ -1,0 +1,14 @@
+[Unit]
+Description=Testing F Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/foologger
+WorkingDirectory=/home/federico
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=federico
+
+[Install]
+WantedBy=multi-user.target
